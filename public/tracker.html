@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAASTA — Share my location</title>
+<meta name="theme-color" content="#1a73e8"><link rel="manifest" href="manifest.json">
+<!--
+  NOTE: navigator.geolocation is only available in a "secure context":
+  https (or localhost). Local dev over plain http will silently fail to
+  even prompt for permission — use `ngrok http 3000` (or Railway/Render's
+  https URL once deployed) to test this page on an actual phone.
+-->
+<style>
+  :root{--blue:#1a73e8;--ink:#202124;--ink-soft:#5f6368;--bg:#f8f9fa;--safe:#188038;--safe-bg:#e6f4ea;--risk:#c5221f;--risk-bg:#fce8e6;--line:#dadce0}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;font-family:Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink);padding:24px;text-align:center}
+  h1{font-size:18px;margin:0 0 4px}
+  p.sub{font-size:12.5px;color:var(--ink-soft);margin:0;max-width:320px}
+  #shareBtn{background:var(--blue);color:#fff;border:0;border-radius:24px;padding:16px 34px;font-size:16px;font-weight:500;box-shadow:0 2px 8px rgba(26,115,232,.35)}
+  #shareBtn.on{background:var(--risk)}
+  #status{font-size:12px;padding:8px 14px;border-radius:8px;background:var(--safe-bg);color:var(--safe);min-width:220px}
+  #status.err{background:var(--risk-bg);color:var(--risk)}
+  #deviceId{font:10.5px ui-monospace,monospace;color:var(--ink-soft)}
+  #lastFix{font-size:11px;color:var(--ink-soft)}
+  #reportForm{width:min(360px,100%);display:flex;flex-direction:column;gap:8px;text-align:left;border-top:1px solid var(--line);padding-top:14px}#reportForm label{font-size:12px;color:var(--ink-soft);display:flex;flex-direction:column;gap:4px}#reportForm select,#reportForm textarea,#reportForm input{font:14px Arial,sans-serif;padding:8px;border:1px solid var(--line);border-radius:7px;background:#fff}#reportBtn{background:#fce8e6;color:#c5221f;border:1px solid #f4c7c3;border-radius:20px;padding:12px 20px;font-weight:500}
+</style>
+</head>
+<body>
+  <h1 data-i18n="trackerTitle">📍 RAASTA field tracker</h1>
+  <p class="sub">Keep this tab open and the screen on for continuous updates. Position is sent to the dashboard every few seconds.</p>
+
+  <button id="shareBtn" type="button" data-i18n="startSharing">Start sharing my location</button>
+  <div id="status" data-i18n="notSharing">Not sharing</div>
+  <div id="lastFix"></div>
+  <div id="deviceId"></div>
+  <button id="reportBtn" type="button" data-i18n="reportIssue">Report an issue</button>
+  <form id="reportForm" hidden>
+    <label><span data-i18n="category">Category</span><select id="reportCategory"><option value="road_damage" data-i18n="roadDamage">Road damage</option><option value="landslide" data-i18n="landslide">Landslide</option><option value="flood" data-i18n="flood">Flood</option><option value="blockage" data-i18n="blockage">Blockage</option><option value="other" data-i18n="other">Other</option></select></label>
+    <label><span data-i18n="note">Note</span><textarea id="reportNote" rows="3" maxlength="1000"></textarea></label>
+    <label><span data-i18n="photo">Optional photo</span><input id="reportPhoto" type="file" accept="image/jpeg,image/png,image/webp"></label>
+    <button id="reportSubmit" type="submit" data-i18n="submitReport">Submit report</button>
+  </form>
+
+<script src="i18n.js"></script><script src="reportQueue.js"></script>
+<script>
+"use strict";
+
+// Stable identity per phone across reloads (bug-free replacement for the
+// old simulated nav marker — this is a REAL device, not an interpolation).
+function getDeviceId() {
+  let id = localStorage.getItem("raasta_device_id");
+  if (!id) {
+    id = "dev-" + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+    localStorage.setItem("raasta_device_id", id);
+  }
+  return id;
+}
+const deviceId = getDeviceId();
+document.getElementById("deviceId").textContent = "Device ID: " + deviceId;
+
+const shareBtn = document.getElementById("shareBtn");
+const statusEl = document.getElementById("status");
+const lastFixEl = document.getElementById("lastFix");
+const reportBtn = document.getElementById("reportBtn");
+const reportForm = document.getElementById("reportForm");
+I18N.applyI18n();
+
+let ws = null;
+let watchId = null;
+let sharing = false;
+let lastSentAt = 0;
+const MIN_INTERVAL_MS = 6000; // throttle: watchPosition can fire far faster than this
+
+function setStatus(text, isErr) {
+  statusEl.textContent = text;
+  statusEl.classList.toggle("err", !!isErr);
+}
+
+function wsUrl() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${location.host}/ws/track`;
+}
+
+function connectSocket() {
+  ws = new WebSocket(wsUrl());
+  ws.addEventListener("open", () => {
+    ws.send(JSON.stringify({ type: "join", role: "tracker", deviceId }));
+  });
+  ws.addEventListener("close", () => {
+    if (sharing) setTimeout(connectSocket, 2000); // auto-reconnect while sharing
+  });
+  ws.addEventListener("error", () => setStatus("Connection issue — retrying…", true));
+}
+
+function sendPosition(pos) {
+  const now = Date.now();
+  if (now - lastSentAt < MIN_INTERVAL_MS) return; // client-side debounce
+  lastSentAt = now;
+  const { latitude, longitude } = pos.coords;
+  const ts = now;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "position", deviceId, lat: latitude, lon: longitude, ts }));
+  }
+  lastFixEl.textContent = `Last fix: ${latitude.toFixed(5)}°, ${longitude.toFixed(5)}° at ${new Date(ts).toLocaleTimeString()}`;
+  setStatus("Sharing live");
+}
+
+function startSharing() {
+  if (!("geolocation" in navigator)) {
+    setStatus("Geolocation not supported on this device/browser.", true);
+    return;
+  }
+  if (!window.isSecureContext) {
+    setStatus("Needs HTTPS — open this page over https:// (e.g. via ngrok).", true);
+    return;
+  }
+  connectSocket();
+  watchId = navigator.geolocation.watchPosition(
+    sendPosition,
+    (err) => setStatus("Location error: " + err.message, true),
+    { enableHighAccuracy: true, maximumAge: 0 }
+  );
+  sharing = true;
+  shareBtn.textContent = I18N.t("stopSharing");
+  shareBtn.classList.add("on");
+  setStatus("Requesting location…");
+}
+
+function stopSharing() {
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+  watchId = null;
+  sharing = false;
+  if (ws) { ws.close(); ws = null; }
+  shareBtn.textContent = "Start sharing my location";
+  shareBtn.classList.remove("on");
+  setStatus(I18N.t("notSharing"));
+}
+
+shareBtn.addEventListener("click", () => (sharing ? stopSharing() : startSharing()));
+reportBtn.addEventListener("click",()=>{reportForm.hidden=!reportForm.hidden;});
+function fileAsDataUrl(file){return new Promise((resolve,reject)=>{if(!file)return resolve(null);const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(file);});}
+reportForm.addEventListener("submit",async(event)=>{event.preventDefault();if(!navigator.geolocation){setStatus(I18N.t("locationUnavailable"),true);return;}navigator.geolocation.getCurrentPosition(async(p)=>{try{const result=await ReportQueue.submit({lat:p.coords.latitude,lon:p.coords.longitude,category:document.getElementById("reportCategory").value,note:document.getElementById("reportNote").value.trim(),photoBase64:await fileAsDataUrl(document.getElementById("reportPhoto").files[0])});setStatus(I18N.t(result.queued?"reportQueued":"reportSent"));reportForm.reset();reportForm.hidden=true;}catch{setStatus(I18N.t("reportFailed"),true);}},()=>setStatus(I18N.t("locationUnavailable"),true),{enableHighAccuracy:true,maximumAge:30_000,timeout:8000});});
+if("serviceWorker" in navigator) navigator.serviceWorker.register("/service-worker.js");
+</script>
+</body>
+</html>

@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NER Route Intelligence — Live Route Safety</title>
+<meta name="description" content="Live-first route intelligence for North Eastern India using road routing, weather and explainable hazard modelling.">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1a73e8">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="panel" id="panel">
+    <div class="panel-scroll">
+      <div class="topbar">
+        <div class="brand">
+          <svg class="logo" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.6"/><path d="M12 6v6l4 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <div><strong>NER Route Intelligence</strong><span class="brand-sub" data-i18n="brand_sub">Live road + weather safety engine</span></div>
+        </div>
+
+        <div class="live-strip">
+          <span class="pulse"></span><span id="systemState" data-i18n="state_live">LIVE-FIRST</span>
+          <span class="tiny" id="lastUpdated" data-i18n="state_ready">Ready</span>
+        </div>
+        <div class="live-strip" id="netStrip">
+          <span class="net-dot" id="netDot"></span><span id="netStatus">● LIVE</span>
+        </div>
+
+        <div class="stops" id="stops"></div>
+        <div class="stop-actions">
+          <button class="add-stop-btn" id="addStopBtn" type="button" data-i18n="btn_add_stop">＋ Add stop</button>
+        </div>
+
+        <div class="options">
+          <label><span data-i18n="vehicle_label">VEHICLE</span>
+            <select id="vehicleSelect" title="Affects safety scoring only — see note below" data-i18n-title="vehicle_scoring_note">
+              <option value="car">Car</option>
+              <option value="truck">Truck</option>
+              <option value="bus">Bus</option>
+              <option value="ambulance">Ambulance</option>
+              <option value="twoWheeler">Two Wheeler</option>
+            </select>
+          </label>
+          <label><span data-i18n="priority_label">PRIORITY</span>
+            <select id="prioritySelect">
+              <option value="balanced">Balanced</option>
+              <option value="safest">Safest</option>
+              <option value="fastest">Fastest</option>
+              <option value="accessible">Accessible</option>
+              <option value="logistics">Logistics</option>
+            </select>
+          </label>
+        </div>
+        <div class="tiny vehicle-note" data-i18n="vehicle_scoring_note">Vehicle type (affects safety scoring only — public OSRM routing does not vary by vehicle)</div>
+
+        <button class="logistics-toggle" id="logisticsToggle" type="button">+ Logistics mission</button>
+        <section class="logistics-panel" id="logisticsPanel" hidden>
+          <div class="logistics-title">Essential-goods movement</div>
+          <input id="missionCargo" type="text" maxlength="80" placeholder="Cargo, e.g. medicines">
+          <input id="missionQuantity" type="text" maxlength="80" placeholder="Quantity, e.g. 20 boxes">
+          <input id="missionVehicle" type="text" maxlength="64" placeholder="Vehicle ID (optional)">
+          <div class="logistics-actions">
+            <button class="go-btn" id="missionCreate" type="button">Create mission</button>
+            <button class="ghost-btn" id="missionRefresh" type="button">Refresh</button>
+          </div>
+          <div class="mission-status" id="missionStatus" aria-live="polite"></div>
+          <div class="mission-list" id="missionList"></div>
+        </section>
+
+        <div class="button-row">
+          <button class="go-btn" id="routeBtn" type="button" data-i18n="btn_get_routes">Get routes</button>
+          <button class="ghost-btn" id="demoBtn" type="button" data-i18n="btn_demo">Demo</button>
+          <button class="theme-btn" id="themeBtn" type="button" title="Change theme" aria-label="Change theme" data-i18n-aria="aria_theme">◐</button>
+          <button class="theme-btn" id="langBtn" type="button" title="Change language" aria-label="Change language" data-i18n-aria="aria_lang">🌐</button>
+        </div>
+        <div class="theme-menu" id="themeMenu" hidden>
+          <button type="button" data-theme="light" data-i18n="theme_light">☀ Light</button>
+          <button type="button" data-theme="dark" data-i18n="theme_dark">☾ Dark</button>
+          <button type="button" data-theme="ocean" data-i18n="theme_ocean">◈ Ocean</button>
+          <button type="button" data-theme="system" data-i18n="theme_system">◐ System</button>
+        </div>
+        <div class="theme-menu" id="langMenu" hidden>
+          <button type="button" data-lang="en" data-i18n="lang_en">English</button>
+          <button type="button" data-lang="hi" data-i18n="lang_hi">हिन्दी</button>
+          <button type="button" data-lang="as" data-i18n="lang_as">অসমীয়া</button>
+        </div>
+        <div class="api-note">Routing: OSRM · Map: Leaflet + OpenStreetMap · Geocoding: Nominatim · Weather: Open-Meteo · Risk: explainable model · GPS: <a href="/tracker.html" target="_blank" rel="noopener">open field tracker ↗</a></div>
+      </div>
+
+      <div class="weather-card" id="weatherCard">
+        <div class="weather-head">
+          <div class="now">
+            <div class="weather-icon" id="wIconMain">☁</div>
+            <div><div class="temp" id="wTemp">--°</div><div class="cond" id="wCond" data-i18n="weather_waiting">Waiting for route</div></div>
+          </div>
+          <div class="loc" id="wLoc" data-i18n="weather_loc_label">Route corridor<br>Live weather</div>
+        </div>
+        <div class="weather-meta">
+          <div class="wm-item">💨 <span id="wWind">-- km/h</span></div>
+          <div class="wm-item">💧 <span id="wHumidity">--%</span></div>
+          <div class="wm-item">🌧 <span id="wRain">-- mm</span></div>
+        </div>
+        <div class="weather-strip" id="weatherStrip"></div>
+        <div class="section-label" style="padding:10px 0 4px;text-transform:none;font-size:10.5px;letter-spacing:.2px" data-i18n="rain_history_label">Past 30 days rainfall (corridor)</div>
+        <div class="weather-strip" id="rainHistoryStrip"></div>
+        <div class="weather-flag" id="weatherFlag" data-i18n="weather_flag_default">Weather is fetched from Open-Meteo for the route corridor.</div>
+      </div>
+
+      <div class="section-label" id="routeCount" data-i18n="routes_none">No routes yet</div>
+      <div class="routes" id="routeList">
+        <div class="empty" data-i18n="routes_hint">Enter locations and select <b>Get routes</b>.</div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="mapzone">
+    <div id="map"></div>
+
+    <div class="map-toolbar">
+      <button class="chip on" id="chipIncidents" type="button" data-i18n="chip_incidents">⚠ Current issues</button>
+      <button class="chip on" id="chipLandslide" type="button" data-i18n="chip_hazards">▲ Hazard signals</button>
+      <button class="chip" id="chipTraffic" type="button" data-i18n="chip_pace">◷ Live pace</button>
+      <button class="chip" id="chipServices" type="button" data-i18n="chip_services">＋ Hospitals & fuel</button>
+      <button class="chip on" id="chipReports" type="button" data-i18n="chip_reports">📍 Field reports</button>
+      <button class="chip report-btn" id="btnNewReport" type="button" data-i18n="btn_new_report">＋ Report</button>
+    </div>
+    <div class="map-legend" aria-label="Map signal legend">
+      <span><i class="legend-dot legend-flood"></i> Flood</span>
+      <span><i class="legend-dot legend-landslide"></i> Landslide</span>
+      <span><i class="legend-dot legend-construction"></i> Construction</span>
+      <span><i class="legend-dot legend-bridge"></i> Bridge</span>
+      <span><i class="legend-dot legend-service"></i> Services</span>
+    </div>
+
+    <div class="map-coordinates" id="mapCoordinates">--.------°, --.------°</div>
+
+    <div class="tracked-panel" id="trackedPanel">
+      <div class="tracked-head" data-i18n="tracked_head">📍 Live-tracked devices</div>
+      <div id="trackedDevices"><div class="empty" data-i18n="tracked_empty">No devices tracking yet.</div></div>
+    </div>
+
+    <div class="map-controls">
+      <div class="mc-group">
+        <button class="mc-btn" id="zoomIn" aria-label="Zoom in" data-i18n-aria="aria_zoom_in">＋</button>
+        <button class="mc-btn" id="zoomOut" aria-label="Zoom out" data-i18n-aria="aria_zoom_out">−</button>
+      </div>
+      <div class="mc-group">
+        <button class="mc-btn locate" id="locateBtn" aria-label="Find my location" data-i18n-aria="aria_locate">◎</button>
+      </div>
+    </div>
+
+    <div class="maptype-toggle">
+      <button class="maptype-opt active" id="mtMap" type="button">Map</button>
+      <button class="maptype-opt" id="mtSat" type="button">Satellite</button>
+    </div>
+
+    <div class="detail-sheet" id="detail" hidden></div>
+
+    <!-- Phase 6: field report composer. Opened by "＋ Report", then a map
+         tap sets the location before this form is shown. -->
+    <div class="report-sheet" id="reportSheet" hidden>
+      <button class="close-sheet" id="reportClose" type="button">×</button>
+      <h3 data-i18n="report_title">New field report</h3>
+      <div class="report-loc-label"><span data-i18n="report_location_label">Location</span>: <span id="reportLocText">--</span></div>
+      <label class="report-field" data-i18n="report_category_label">Category
+        <select id="reportCategory">
+          <option value="road_damage" data-i18n="cat_road_damage">Road damage</option>
+          <option value="landslide" data-i18n="cat_landslide">Landslide</option>
+          <option value="flood" data-i18n="cat_flood">Flood</option>
+          <option value="bridge_damage" data-i18n="cat_bridge_damage">Bridge damage</option>
+          <option value="blockage" data-i18n="cat_blockage">Blockage</option>
+          <option value="traffic" data-i18n="cat_traffic">Traffic</option>
+          <option value="other" data-i18n="cat_other">Other</option>
+        </select>
+      </label>
+      <label class="report-field" data-i18n="report_note_label">Note (optional)
+        <textarea id="reportNote" maxlength="500" rows="2" data-i18n-placeholder="report_note_placeholder" placeholder="What's happening here?"></textarea>
+      </label>
+      <label class="report-field" data-i18n="report_photo_label">Photo (optional)
+        <input type="file" id="reportPhoto" accept="image/*">
+      </label>
+      <div class="report-actions">
+        <button class="ghost-btn" id="reportCancel" type="button" data-i18n="report_cancel">Cancel</button>
+        <button class="go-btn" id="reportSubmit" type="button" data-i18n="report_submit">Submit report</button>
+      </div>
+    </div>
+
+    <div class="nav-top" id="navTop" hidden>
+      <div class="nav-arrow" id="navArrow" role="img" aria-label="Turn arrow">➤</div>
+      <div class="dist" id="navDist">--</div>
+      <div class="instr" id="navInstr"><span data-i18n="nav_starting">Starting navigation</span><small data-i18n="nav_follow">Follow the highlighted route</small></div>
+      <button class="exit-btn" id="exitNav" aria-label="Exit navigation preview">×</button>
+    </div>
+    <div class="nav-bottom" id="navBottom" hidden>
+      <div class="nav-speed"><div class="v" id="navSpeed">--</div><div class="u">km/h</div></div>
+      <div class="eta"><span id="navEta">--</span><small>Estimated arrival</small></div>
+      <div class="rem" id="navRem">-- remaining</div>
+      <div class="spacer"></div>
+      <div class="nav-alert" id="navAlert" hidden>⚠ Risk signal ahead</div>
+      <button class="end-btn" id="endNav">End</button>
+    </div>
+    <button class="recenter-btn" id="recenterBtn" hidden aria-label="Re-center map on navigation" data-i18n-aria="aria_recenter">◎ Re-center</button>
+
+    <div class="toast" id="toast" hidden></div>
+  </main>
+</div>
+
+<div class="analysis-overlay" id="analysisOverlay" hidden>
+  <div class="analysis-panel">
+    <div class="analysis-panel__ring"></div>
+    <h3>AI ROUTE ANALYSIS</h3>
+    <ul class="analysis-steps" id="analysisSteps"></ul>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="i18n.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
